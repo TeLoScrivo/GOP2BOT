@@ -1,43 +1,23 @@
-const express = require('express');
-const app = express();
-
-app.get('/', (req, res) => {
-  res.send('Bot is running!');
-});
-
-app.listen(3000, () => {
-  console.log('Web server active on port 3000');
-});
-
 const { Client, GatewayIntentBits, SlashCommandBuilder, REST, Routes, EmbedBuilder, PermissionFlagsBits, ActivityType } = require('discord.js');
-const noblox = require('noblox.js');
 const axios = require('axios');
+const express = require('express');
+
+// --- KEEP ALIVE SERVER ---
+const app = express();
+app.get('/', (req, res) => res.send('Verification Bot is Online!'));
+app.listen(3000, () => console.log('Web server heartbeat active.'));
 
 // --- SETTINGS ---
-noblox.setOptions({ show_deprecation_warnings: false });
-
 const PROXY_LIST = ["roproxy.com", "rpro.xyz", "roproxy.org"];
 let currentProxyIndex = 0;
-
-// Randomized User-Agent to prevent proxy blocking
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36';
 
-function getBaseUrl() {
-    return PROXY_LIST[currentProxyIndex];
-}
-
-function rotateProxy() {
-    currentProxyIndex = (currentProxyIndex + 1) % PROXY_LIST.length;
-    console.log(`🔄 Proxy rotated to: ${getBaseUrl()}`);
-}
+function getBaseUrl() { return PROXY_LIST[currentProxyIndex]; }
+function rotateProxy() { currentProxyIndex = (currentProxyIndex + 1) % PROXY_LIST.length; }
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
-const ALLOWED_ROLES = [
-    '1431687501554122865', // Senior Team
-    '1431687881537228920', // Staff Team
-    '1431688034973253842'  // Trainee Staff
-];
+const ALLOWED_ROLES = ['1431687501554122865', '1431687881537228920', '1431688034973253842'];
 
 const gamepassData = [
     { id: "1317302770", badgeTransferred: "1044208440593825", badgeReceived: "1423790028372355" }, 
@@ -55,8 +35,7 @@ const gamepassData = [
     { id: "1317980628", badgeTransferred: "1955785257394848", badgeReceived: "698477613282187" } 
 ];
 
-// --- HELPERS ---
-
+// --- HELPER FETCH ---
 async function fetchWithRetry(url, method = 'GET', data = null) {
     for (let i = 0; i < PROXY_LIST.length; i++) {
         try {
@@ -64,46 +43,41 @@ async function fetchWithRetry(url, method = 'GET', data = null) {
                 method,
                 url: url.replace('roblox.com', getBaseUrl()),
                 headers: { 'User-Agent': USER_AGENT, 'Content-Type': 'application/json' },
-                timeout: 6000
+                timeout: 7000
             };
             if (data) config.data = data;
             return await axios(config);
-        } catch (e) {
-            rotateProxy();
-        }
+        } catch (e) { rotateProxy(); }
     }
     throw new Error("All proxies failed");
 }
 
 async function loadPassNames() {
     console.log("Loading GamePass names...");
-    const namePromises = gamepassData.map(async (pass) => {
+    await Promise.allSettled(gamepassData.map(async (pass) => {
         try {
             const res = await fetchWithRetry(`https://economy.roblox.com/v1/game-passes/${pass.id}/product-info`);
             pass.name = res.data.Name;
         } catch (e) { pass.name = "Unknown Pass"; }
-    });
-    await Promise.allSettled(namePromises);
+    }));
 }
 
 async function performCheck(interaction, robloxId) {
     try {
-        let username = "Unknown User", joinDate = "Unknown Date", isPublic = false, avatarUrl = "";
+        let username = "Unknown", joinDate = "Unknown", isPublic = false, avatarUrl = "";
 
-        // 1. User Info
+        // Get Details
         try {
             const res = await fetchWithRetry(`https://users.roblox.com/v1/users/${robloxId}`);
             username = res.data.displayName || res.data.name;
             joinDate = new Date(res.data.created).toLocaleDateString();
         } catch (e) {}
 
-        // 2. Inventory
         try {
             const res = await fetchWithRetry(`https://inventory.roblox.com/v1/users/${robloxId}/can-view-inventory`);
             isPublic = res.data.canView;
         } catch (e) {}
 
-        // 3. Thumbnails
         try {
             const res = await fetchWithRetry(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${robloxId}&size=420x420&format=Png`);
             avatarUrl = res.data.data[0].imageUrl;
@@ -118,11 +92,11 @@ async function performCheck(interaction, robloxId) {
                     ownsPass = res.data.data && res.data.data.length > 0;
                 } catch (e) {}
             }
-
+            
             let ownsBadge = false;
-            if (pass.badgeTransferred || pass.badgeReceived) {
+            const bId = pass.badgeTransferred || pass.badgeReceived;
+            if (bId) {
                 try {
-                    const bId = pass.badgeTransferred || pass.badgeReceived;
                     const res = await fetchWithRetry(`https://badges.roblox.com/v1/users/${robloxId}/badges/awarded-dates?badgeIds=${bId}`);
                     ownsBadge = res.data.data && res.data.data.length > 0;
                 } catch (e) {}
@@ -138,17 +112,12 @@ async function performCheck(interaction, robloxId) {
             .setThumbnail(avatarUrl)
             .setColor(isPublic ? 0x2ecc71 : 0xe74c3c)
             .setDescription(`📅 **Joined:** ${joinDate}\n🔓 **Inventory:** ${isPublic ? "Public" : "Private"}\n\n**Ownership (${ownedCount}/${gamepassData.length})**\n${passList}`)
-            .setFooter({ text: `Staff: ${interaction.user.username} • ID: ${robloxId}` });
+            .setTimestamp();
 
         await interaction.editReply({ embeds: [embed] });
-    } catch (err) {
-        await interaction.editReply("❌ Error fetching data.");
-    }
+    } catch (err) { await interaction.editReply("❌ Error loading Roblox data."); }
 }
 
-// --- COMMANDS ---
-
-const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 const slashCmds = [
     new SlashCommandBuilder().setName('checkuser').setDescription('Check Roblox user').addStringOption(o => o.setName('target').setDescription('Username or ID').setRequired(true)),
     new SlashCommandBuilder().setName('checkdiscorduser').setDescription('Check member').addUserOption(o => o.setName('member').setDescription('Member').setRequired(true))
@@ -166,16 +135,10 @@ client.on('interactionCreate', async interaction => {
         let userId = target;
         if (isNaN(target)) {
             try {
-                // Try the Search API first (often less ratelimited than the POST usernames API)
                 const res = await fetchWithRetry(`https://users.roblox.com/v1/usernames/users`, 'POST', { usernames: [target], excludeBannedUsers: false });
-                if (res.data.data[0]) {
-                    userId = res.data.data[0].id;
-                } else {
-                    return interaction.editReply("❌ User not found.");
-                }
-            } catch (e) {
-                return interaction.editReply("❌ All proxies are currently busy. Try again in 30 seconds.");
-            }
+                if (res.data.data[0]) userId = res.data.data[0].id;
+                else return interaction.editReply("❌ User not found.");
+            } catch (e) { return interaction.editReply("❌ Connection error."); }
         }
         await performCheck(interaction, userId);
     }
@@ -184,9 +147,9 @@ client.on('interactionCreate', async interaction => {
 (async () => {
     try {
         await loadPassNames();
+        const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
         await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: slashCmds });
         client.login(process.env.DISCORD_TOKEN);
         console.log("🚀 Bot Online");
     } catch (e) { console.error(e); }
-
 })();
