@@ -1,3 +1,14 @@
+const express = require('express');
+const app = express();
+
+app.get('/', (req, res) => {
+  res.send('Bot is running!');
+});
+
+app.listen(3000, () => {
+  console.log('Web server active on port 3000');
+});
+
 const { Client, GatewayIntentBits, SlashCommandBuilder, REST, Routes, EmbedBuilder, PermissionFlagsBits, ActivityType } = require('discord.js');
 const noblox = require('noblox.js');
 const axios = require('axios');
@@ -177,4 +188,5 @@ client.on('interactionCreate', async interaction => {
         client.login(process.env.DISCORD_TOKEN);
         console.log("🚀 Bot Online");
     } catch (e) { console.error(e); }
+
 })();
